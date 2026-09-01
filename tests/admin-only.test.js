@@ -27,6 +27,8 @@ test("the browser uses direct atomic Firestore transactions and no callable Func
   assert.match(code, /reservation-permanently-deleted/);
   assert.match(code, /payhere-refund-confirmed/);
   assert.match(code, /refunded-payhere-reservation-permanently-deleted/);
+  assert.match(code, /unpaid-payhere-reservation-permanently-deleted/);
+  assert.match(code, /isUnpaidPayHereSessionDeletable/);
   assert.match(code, /status: "refunded"/);
   assert.match(code, /reservationDeleted: true/);
   assert.match(code, /seatSnapshot\.data\(\)\?\.reservationId === reservation\.id/);
@@ -36,7 +38,7 @@ test("the browser uses direct atomic Firestore transactions and no callable Func
 test("Firestore rules preserve public availability while keeping records and writes admin-only", async () => {
   const rules = await read("firestore.rules");
   assert.match(rules, /match \/seats\/\{seatId\}[\s\S]*allow read: if true;[\s\S]*allow create, update, delete: if isAdmin\(\);/);
-  assert.match(rules, /match \/reservations\/\{reservationId\}[\s\S]*validPayHereReservationRefundUpdate\(reservationId\)[\s\S]*refundedSessionReadyForDeletion/);
+  assert.match(rules, /match \/reservations\/\{reservationId\}[\s\S]*validPayHereReservationRefundUpdate\(reservationId\)[\s\S]*paymentSessionReadyForDeletion/);
   assert.match(rules, /match \/admins\/\{uid\}[\s\S]*allow list, create, update, delete: if false;/);
   assert.match(rules, /match \/paymentSessions\/\{id\}[\s\S]*allow update: if isAdmin\(\) && validPaymentSessionRefundUpdate\(\);[\s\S]*allow create, delete: if false;/);
   assert.match(rules, /changed\.hasOnly\(\["reservationDeleted", "reservationDeletedAt", "updatedAt"\]\)/);
@@ -56,6 +58,6 @@ test("GitHub Pages workflow tests and publishes only the static admin site", asy
   assert.match(workflow, /actions\/configure-pages@v6/);
   assert.match(workflow, /actions\/upload-pages-artifact@v5/);
   assert.match(workflow, /actions\/deploy-pages@v5/);
-  assert.match(workflow, /cp index\.html admin\.html robots\.txt \.nojekyll _site\//);
+  assert.match(workflow, /cp index\.html admin\.html robots\.txt _site\/[\s\S]*touch _site\/\.nojekyll/);
   assert.doesNotMatch(workflow, /path:\s*\./);
 });

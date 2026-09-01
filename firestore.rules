@@ -48,13 +48,27 @@ service cloud.firestore {
         session.status == "refunded";
     }
 
-    function refundedSessionReadyForDeletion(data, reservationId) {
+    function isUnpaidDeletablePaymentSession(data) {
+      return data.status == "cancelled" ||
+        data.status == "failed" ||
+        data.status == "expired" ||
+        (
+          data.status == "created" &&
+          ("expiresAt" in data && data.expiresAt is timestamp) &&
+          data.expiresAt <= request.time
+        );
+    }
+
+    function paymentSessionReadyForDeletion(data, reservationId) {
       let session = getAfter(
         /databases/$(database)/documents/paymentSessions/$(data.paymentSessionId)
       ).data;
       return session.reservationId == reservationId &&
-        session.status == "refunded" &&
-        session.reservationDeleted == true;
+        session.reservationDeleted == true &&
+        (
+          (session.status == "refunded" && isConfirmedPayHereRefund(data)) ||
+          isUnpaidDeletablePaymentSession(session)
+        );
     }
 
     function validPaymentSessionRefundUpdate() {
@@ -73,8 +87,11 @@ service cloud.firestore {
           ])
         ) ||
         (
-          resource.data.status == "refunded" &&
-          request.resource.data.status == "refunded" &&
+          (
+            resource.data.status == "refunded" ||
+            isUnpaidDeletablePaymentSession(resource.data)
+          ) &&
+          request.resource.data.status == resource.data.status &&
           request.resource.data.reservationDeleted == true &&
           request.resource.data.reservationDeletedAt == request.time &&
           request.resource.data.updatedAt == request.time &&
@@ -110,10 +127,7 @@ service cloud.firestore {
       );
       allow delete: if isAdmin() && (
         !isPayHereReservation(resource.data) ||
-        (
-          isConfirmedPayHereRefund(resource.data) &&
-          refundedSessionReadyForDeletion(resource.data, reservationId)
-        )
+        paymentSessionReadyForDeletion(resource.data, reservationId)
       );
     }
 
@@ -124,7 +138,8 @@ service cloud.firestore {
     }
 
     // Retain the payment system's protected evidence. Administrators can only
-    // record a paid-to-refunded transition and the later reservation-deletion marker.
+    // record a paid-to-refunded transition or attach a reservation-deletion marker
+    // to an already refunded, cancelled, failed or expired session.
     // Cloud Functions use Firebase Admin SDK and do not depend on these client grants.
     match /paymentSessions/{id} {
       allow read: if isAdmin();

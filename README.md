@@ -13,6 +13,7 @@ This is the plain HTML/CSS/JavaScript version of the original 600-seat project, 
 - Atomic Firestore transactions prevent double booking.
 - Search, filter and export reservation records.
 - Permanently delete walk-in or legacy reservations and release only seats still owned by them.
+- Delete cancelled, failed or expired unpaid/test PayHere reservation records through the GUI after checking the matching payment session.
 - Confirm a completed PayHere refund, release the refunded reservation's owned seats and unlock permanent deletion.
 - Preserve the refunded PayHere payment session, payment events and immutable audit evidence after the customer-facing reservation is deleted.
 - No Cloud Functions are required by this admin portal.
@@ -50,6 +51,14 @@ The second method requires no Cloud Function. See `DEPLOYMENT.md` for the exact 
 
 ## PayHere refund and deletion behaviour
 
+The action shown for an unrefunded PayHere record checks its matching `paymentSessions` document before doing anything:
+
+- `cancelled`, `failed` or `expired`: the GUI offers **Delete unpaid record**. A `created` session is treated as expired only after its recorded `expiresAt` time has passed.
+- `paid`: the GUI opens the refund-confirmation flow described below.
+- an active `created`/pending session: deletion remains blocked so a payment still in progress cannot lose its reservation record.
+
+Deleting an eligible unpaid/test record releases only seats still owned by that reservation and removes the reservation/customer document. The payment session is retained with a deletion marker, and an immutable `unpaid-payhere-reservation-permanently-deleted` audit record is created. This deletion does not claim that a refund occurred.
+
 The **Confirm refunded** action does not contact PayHere or transfer money. Staff must first complete and verify the refund in the PayHere merchant portal. The portal then requires the exact reservation reference and an explicit verification checkbox.
 
 The confirmation transaction:
@@ -72,7 +81,7 @@ The **Delete permanently** action for walk-in and legacy records runs one Firest
 4. Deletes the reservation document.
 5. Creates a minimal audit entry without copying customer details.
 
-This prevents deletion of an old record from accidentally releasing a seat that has since been assigned to somebody else. Unrefunded PayHere reservations remain protected by both the UI and Firestore rules. The deletion cannot be undone, so take a Firestore backup or export before event operations.
+This prevents deletion of an old record from accidentally releasing a seat that has since been assigned to somebody else. Paid and active/pending PayHere reservations remain protected by both the UI and Firestore rules. Eligible unpaid sessions can be removed only after their database status is checked. The deletion cannot be undone, so take a Firestore backup or export before event operations.
 
 ## Quick verification
 

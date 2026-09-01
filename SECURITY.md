@@ -26,7 +26,9 @@ Firestore rules permit the payment session to move only from `paid` to `refunded
 
 For walk-in and legacy records, the reservation and owned seat documents are permanently removed. A minimal audit record remains so staff can establish that an authorised deletion occurred. It contains the reference, show, seats, actor and timestamp but does not copy customer name, contact or ID.
 
-For PayHere records, deletion is allowed only after the verified refund state exists in both the reservation and payment session. The reservation/customer document is removed, but the refunded payment session, payment events and audit evidence remain. This removes the record from the operational reservation table without erasing financial evidence.
+For a paid PayHere record, deletion is allowed only after the verified refund state exists in both the reservation and payment session. For an unpaid/test PayHere record, deletion is allowed only when the matching payment session is already `cancelled`, `failed`, `expired`, or is a `created` session whose recorded expiry time has passed. Active/pending, paid and missing-session records remain protected.
+
+In either permitted case, the reservation/customer document is removed but the payment session, payment events and audit evidence remain. The payment session receives a `reservationDeleted` marker. The rules do not permit the browser to change a cancelled/failed/expired session into another payment status while deleting its reservation.
 
 ## Recommended operations
 

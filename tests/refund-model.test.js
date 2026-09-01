@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  effectivePaymentSessionStatus,
   isPayHereReservation,
   isRefundConfirmed,
+  isUnpaidPayHereSessionDeletable,
   refundEligibility,
   validateRefundConfirmation,
 } from "../js/refund-model.js";
@@ -52,6 +54,27 @@ test("refund confirmation requires exact reference and PayHere verification", ()
     typedReference: "GK-TEST1234",
     verifiedInPayHere: false,
   }), /completed in the PayHere merchant portal/);
+});
+
+test("cancelled, failed and expired unpaid PayHere sessions can be deleted", () => {
+  for (const status of ["cancelled", "failed", "expired"]) {
+    assert.equal(isUnpaidPayHereSessionDeletable(reservation, { ...paidSession, status }), true);
+  }
+
+  const expiredCreatedSession = {
+    ...paidSession,
+    status: "created",
+    expiresAt: { toMillis: () => 9_000 },
+  };
+  assert.equal(effectivePaymentSessionStatus(expiredCreatedSession, 10_000), "expired");
+  assert.equal(isUnpaidPayHereSessionDeletable(reservation, expiredCreatedSession, 10_000), true);
+  assert.equal(isUnpaidPayHereSessionDeletable(reservation, {
+    ...expiredCreatedSession,
+    expiresAt: { toMillis: () => 11_000 },
+  }, 10_000), false);
+  assert.equal(isUnpaidPayHereSessionDeletable(reservation, paidSession), false);
+  assert.equal(isUnpaidPayHereSessionDeletable(reservation, { ...paidSession, status: "refunded" }), false);
+  assert.equal(isUnpaidPayHereSessionDeletable(reservation, { ...paidSession, reservationId: "another" }), false);
 });
 
 test("permanent deletion unlocks only after the verified refund state", () => {

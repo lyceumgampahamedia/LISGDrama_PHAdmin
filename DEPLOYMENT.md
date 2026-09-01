@@ -160,11 +160,24 @@ Use only an authorised test transaction or a genuine customer refund:
 
 Never use **Confirm refunded** merely to release an unpaid or failed transaction. The transaction intentionally accepts only a PayHere payment session whose Firebase status is `paid`.
 
+### Unpaid/test-record deletion test
+
+For a test record whose matching `paymentSessions` document is already `cancelled`, `failed` or `expired`:
+
+1. Find the record in the admin table.
+2. Select **Delete unpaid record**. If the reservation status itself is not visibly cancelled/failed/expired, select **Manage PayHere record**; the same status check runs before deletion.
+3. Read the confirmation and select **OK**.
+4. Confirm the reservation disappears and every seat still owned by it becomes available.
+5. Confirm the payment-session document remains and has `reservationDeleted: true`.
+6. Confirm `auditLogs` contains `unpaid-payhere-reservation-permanently-deleted`.
+
+No refund is required because these statuses do not represent a successful payment. Paid, missing-payment-session and active/pending records remain protected. Deploy the supplied `firestore.rules` before testing this feature; replacing only the website files is not sufficient.
+
 ## 11. Final production checks
 
 1. Visit the final HTTPS URL in a private browser window.
 2. Confirm no seat map or customer data is visible before login.
-3. Confirm admin login, seat selection, booking, search, CSV, refund confirmation and gated deletion.
+3. Confirm admin login, seat selection, booking, search, CSV, unpaid-record deletion, refund confirmation and gated deletion.
 4. Confirm the separate public payment site still loads availability and completes its normal Cloud Function flow.
 5. Confirm a non-admin Firebase account cannot read reservations or write seats using the browser.
 6. Review Firebase Authentication, App Check and Firestore logs for rejected or unusual access.

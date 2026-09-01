@@ -1,6 +1,6 @@
 # Verification Results
 
-Verified on 31 August 2026 for the PayHere refund-management release.
+Verified on 1 September 2026 for the PayHere refund and unpaid/test-record deletion release.
 
 ## Automated checks
 
@@ -14,7 +14,7 @@ node --check js/refund-model.js
 node --test tests/admin-only.test.js tests/booking-model.test.js tests/refund-model.test.js
 ```
 
-Result: **15 passed, 0 failed**.
+Result: **16 passed, 0 failed**.
 
 The checks cover:
 
@@ -22,9 +22,12 @@ The checks cover:
 - Direct atomic Firestore transactions with no callable Cloud Function dependency.
 - Safe permanent deletion ownership check.
 - Matching paid-session validation before PayHere refund confirmation.
+- GUI deletion eligibility for cancelled, failed and expired unpaid PayHere sessions.
+- Time-based expiry handling for a `created` payment session after `expiresAt`.
 - Exact-reference and merchant-portal verification requirements.
 - Atomic refund status updates and ownership-checked seat release.
-- Protection of unrefunded PayHere reservations from permanent deletion.
+- Protection of paid and active/pending PayHere reservations from permanent deletion.
+- Immutable unpaid-deletion audit records and retained payment evidence.
 - Retention of payment sessions, payment events and audit evidence after deletion.
 - Compatible Firestore rules for the shared online-payment database.
 - Apache source-file blocking and no-store headers.
@@ -53,4 +56,4 @@ The clean GitHub Pages artifact returned 404 for `/firestore.rules` and `/README
 
 ## Live Firebase and PayHere checks still required
 
-Static validation cannot authenticate against the production Firebase project, verify a PayHere merchant-portal refund or mutate live data. Deploy the supplied Firestore rules, then complete the non-admin rejection, admin login, authorised refund, seat release, gated deletion, retained-payment-evidence, public-payment-site compatibility and App Check checks in `DEPLOYMENT.md` before operational use.
+Static validation cannot authenticate against the production Firebase project, verify a PayHere merchant-portal refund or mutate live data. Deploy the supplied Firestore rules, then complete the non-admin rejection, admin login, authorised refund, unpaid-record deletion, seat release, gated deletion, retained-payment-evidence, public-payment-site compatibility and App Check checks in `DEPLOYMENT.md` before operational use.

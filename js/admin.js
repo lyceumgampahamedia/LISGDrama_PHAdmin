@@ -36,8 +36,10 @@ import {
 } from "./booking-model.js";
 import { renderSalesSummary } from "./sales-summary.js";
 import {
+  effectivePaymentSessionStatus,
   isPayHereReservation,
   isRefundConfirmed,
+  isUnpaidPayHereSessionDeletable,
   refundEligibility,
   validateRefundConfirmation,
 } from "./refund-model.js";
@@ -521,10 +523,14 @@ function renderReservations() {
     action.type = "button";
     const busy = state.busyReservationId === reservation.id;
     if (isPayHereReservation(reservation) && !isRefundConfirmed(reservation)) {
-      action.className = "refund-action";
-      action.textContent = busy ? "Checking…" : "Confirm refunded";
-      action.title = "Use only after the payment has been refunded in the PayHere merchant portal.";
-      action.addEventListener("click", () => openRefundDialog(reservation));
+      const status = effectiveReservationStatus(reservation);
+      const looksUnpaid = ["cancelled", "failed", "expired"].includes(status);
+      action.className = looksUnpaid ? "delete-action" : "refund-action";
+      action.textContent = busy ? "Checking…" : looksUnpaid ? "Delete unpaid record" : "Manage PayHere record";
+      action.title = looksUnpaid
+        ? "The payment session will be checked before this test or unpaid record can be deleted."
+        : "Paid sessions require refund confirmation; cancelled, failed and expired sessions can be deleted safely.";
+      action.addEventListener("click", () => managePayHereReservation(reservation));
     } else {
       action.className = "delete-action";
       action.textContent = busy ? "Deleting…" : "Delete permanently";
@@ -544,7 +550,7 @@ function clearRefundDialogState() {
   setError("#refund-error");
 }
 
-async function openRefundDialog(reservation) {
+async function managePayHereReservation(reservation) {
   const reference = reservation.reference || reservation.id;
   state.busyReservationId = reservation.id;
   setError("#admin-error");
@@ -556,6 +562,12 @@ async function openRefundDialog(reservation) {
     const paymentSession = paymentSessionSnapshot.exists()
       ? { id: paymentSessionSnapshot.id, ...paymentSessionSnapshot.data() }
       : null;
+    if (isUnpaidPayHereSessionDeletable(reservation, paymentSession, Date.now())) {
+      state.busyReservationId = "";
+      renderReservations();
+      await deleteReservation(reservation, { paymentSession, unpaidPayHereDeletion: true });
+      return;
+    }
     const eligibility = refundEligibility(reservation, paymentSession);
     if (!eligibility.eligible) throw new Error(eligibility.reason);
 
@@ -570,8 +582,8 @@ async function openRefundDialog(reservation) {
     setError("#refund-error");
     $("#refund-dialog").showModal();
   } catch (error) {
-    console.error("PayHere refund check error:", error);
-    setError("#admin-error", error.message || "The PayHere payment could not be checked.");
+    console.error("PayHere record check error:", error);
+    setError("#admin-error", error.message || "The PayHere payment record could not be checked.");
   } finally {
     state.busyReservationId = "";
     renderReservations();
@@ -695,16 +707,20 @@ async function confirmPayHereRefund(event) {
   }
 }
 
-async function deleteReservation(reservation) {
+async function deleteReservation(reservation, options = {}) {
   const payHereReservation = isPayHereReservation(reservation);
-  if (payHereReservation && !isRefundConfirmed(reservation)) {
-    setError("#admin-error", "Confirm the completed PayHere refund before deleting this reservation.");
+  const unpaidPayHereDeletion = options.unpaidPayHereDeletion === true
+    && isUnpaidPayHereSessionDeletable(reservation, options.paymentSession, Date.now());
+  if (payHereReservation && !isRefundConfirmed(reservation) && !unpaidPayHereDeletion) {
+    setError("#admin-error", "Use Manage PayHere record so the current payment status can be checked before deletion.");
     return;
   }
   const reference = reservation.reference || reservation.id;
   const seats = (reservation.seatIds || []).join(", ") || "no recorded seats";
   const paymentNotice = payHereReservation
-    ? "\n\nThe reservation and customer record will be deleted. The refunded PayHere payment session, payment events and audit evidence will be retained."
+    ? unpaidPayHereDeletion
+      ? `\n\nNo successful payment was recorded. Payment-session status: ${effectivePaymentSessionStatus(options.paymentSession, Date.now())}. The reservation and customer record will be deleted, while payment and audit evidence will be retained.`
+      : "\n\nThe reservation and customer record will be deleted. The refunded PayHere payment session, payment events and audit evidence will be retained."
     : "";
   const confirmed = window.confirm(
     `Permanently delete ${reference}?\n\nRecorded seats: ${seats}\n\nAny seats still owned by this record will become available.${paymentNotice}\n\nThis action cannot be undone.`,
@@ -724,19 +740,20 @@ async function deleteReservation(reservation) {
       const data = reservationSnapshot.data();
       const freshReservation = { id: reservationSnapshot.id, ...data };
       const freshIsPayHere = isPayHereReservation(freshReservation);
-      if (freshIsPayHere && !isRefundConfirmed(freshReservation)) throw new Error("refund-required");
 
       let paymentSessionRef = null;
       let paymentSession = null;
+      let payHereDeletionType = "";
       if (freshIsPayHere) {
         if (!data.paymentSessionId) throw new Error("payment-session-missing");
         paymentSessionRef = doc(db, "paymentSessions", data.paymentSessionId);
         const paymentSessionSnapshot = await transaction.get(paymentSessionRef);
         if (!paymentSessionSnapshot.exists()) throw new Error("payment-session-missing");
-        paymentSession = paymentSessionSnapshot.data();
-        if (paymentSession.reservationId !== reservation.id || paymentSession.status !== "refunded") {
-          throw new Error("refund-required");
-        }
+        paymentSession = { id: paymentSessionSnapshot.id, ...paymentSessionSnapshot.data() };
+        const refundedDeletion = isRefundConfirmed(freshReservation) && paymentSession.status === "refunded";
+        const unpaidDeletion = isUnpaidPayHereSessionDeletable(freshReservation, paymentSession, Date.now());
+        if (!refundedDeletion && !unpaidDeletion) throw new Error("payment-protected");
+        payHereDeletionType = refundedDeletion ? "refunded" : "unpaid";
       }
 
       const showId = data.showId;
@@ -758,12 +775,17 @@ async function deleteReservation(reservation) {
         });
       }
       transaction.set(auditRef, {
-        action: freshIsPayHere ? "refunded-payhere-reservation-permanently-deleted" : "reservation-permanently-deleted",
+        action: freshIsPayHere
+          ? payHereDeletionType === "refunded"
+            ? "refunded-payhere-reservation-permanently-deleted"
+            : "unpaid-payhere-reservation-permanently-deleted"
+          : "reservation-permanently-deleted",
         deletedReservationId: reservation.id,
         ...(freshIsPayHere ? {
           paymentSessionId: data.paymentSessionId,
           gatewayPaymentId: String(paymentSession?.gatewayPaymentId || data.refund?.gatewayPaymentId || ""),
-          refundConfirmed: true,
+          paymentStatus: effectivePaymentSessionStatus(paymentSession, Date.now()),
+          refundConfirmed: payHereDeletionType === "refunded",
         } : {}),
         reference: data.reference || reservation.id,
         showId: showId || "",
@@ -779,7 +801,7 @@ async function deleteReservation(reservation) {
     const message = {
       "record-missing": "That record was already deleted.",
       "payment-session-missing": "The PayHere payment session is missing, so this record remains protected.",
-      "refund-required": "The PayHere refund must be confirmed before permanent deletion.",
+      "payment-protected": "Paid or still-pending PayHere records remain protected. Refund a paid transaction first, or wait until an unpaid session is cancelled, failed or expired.",
     }[error.message] || "The record could not be deleted. Check Firestore permissions and try again.";
     setError("#admin-error", message);
   } finally {

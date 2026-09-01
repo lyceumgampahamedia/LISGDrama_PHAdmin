@@ -8,6 +8,27 @@ export function isRefundConfirmed(reservation) {
     && reservation?.refund?.confirmed === true;
 }
 
+function matchingPaymentSession(reservation, paymentSession) {
+  return Boolean(
+    reservation?.paymentSessionId
+    && paymentSession
+    && (!paymentSession.id || paymentSession.id === reservation.paymentSessionId)
+    && paymentSession.reservationId === reservation.id,
+  );
+}
+
+export function effectivePaymentSessionStatus(paymentSession, now = Date.now()) {
+  if (!paymentSession) return "missing";
+  const expiresAt = paymentSession.expiresAt?.toMillis?.();
+  if (paymentSession.status === "created" && expiresAt && expiresAt <= now) return "expired";
+  return paymentSession.status || "unknown";
+}
+
+export function isUnpaidPayHereSessionDeletable(reservation, paymentSession, now = Date.now()) {
+  if (!isPayHereReservation(reservation) || !matchingPaymentSession(reservation, paymentSession)) return false;
+  return ["cancelled", "failed", "expired"].includes(effectivePaymentSessionStatus(paymentSession, now));
+}
+
 export function refundEligibility(reservation, paymentSession) {
   if (!isPayHereReservation(reservation)) {
     return { eligible: false, reason: "This is not a PayHere reservation." };
@@ -21,10 +42,7 @@ export function refundEligibility(reservation, paymentSession) {
   if (!paymentSession) {
     return { eligible: false, reason: "The matching PayHere payment session could not be found." };
   }
-  if (paymentSession.id && paymentSession.id !== reservation.paymentSessionId) {
-    return { eligible: false, reason: "The payment-session identifier does not match this reservation." };
-  }
-  if (paymentSession.reservationId !== reservation.id) {
+  if (!matchingPaymentSession(reservation, paymentSession)) {
     return { eligible: false, reason: "The payment session does not belong to this reservation." };
   }
   if (paymentSession.status !== "paid") {
