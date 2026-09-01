@@ -1,0 +1,153 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function activeAdminDocument() {
+      return /databases/$(database)/documents/admins/$(request.auth.uid);
+    }
+
+    function isAdmin() {
+      return signedIn() && (
+        ("admin" in request.auth.token && request.auth.token.admin == true) ||
+        (exists(activeAdminDocument()) && get(activeAdminDocument()).data.active == true)
+      );
+    }
+
+    function isPayHereReservation(data) {
+      return ("paymentGateway" in data && data.paymentGateway == "payhere") ||
+        ("paymentSessionId" in data && data.paymentSessionId is string);
+    }
+
+    function isConfirmedPayHereRefund(data) {
+      return isPayHereReservation(data) &&
+        data.status == "refunded" &&
+        ("refund" in data && data.refund is map) &&
+        ("confirmed" in data.refund && data.refund.confirmed == true);
+    }
+
+    function validPayHereReservationRefundUpdate(reservationId) {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let session = getAfter(
+        /databases/$(database)/documents/paymentSessions/$(resource.data.paymentSessionId)
+      ).data;
+      return request.resource.data.status == "refunded" &&
+        request.resource.data.refundStatus == "confirmed" &&
+        request.resource.data.refundedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.refund is map &&
+        request.resource.data.refund.confirmed == true &&
+        request.resource.data.refund.source == "payhere-merchant-portal" &&
+        request.resource.data.refund.confirmedAt == request.time &&
+        request.resource.data.refund.confirmedBy == request.auth.uid &&
+        changed.hasOnly(["status", "refundStatus", "refundedAt", "updatedAt", "refund"]) &&
+        session.reservationId == reservationId &&
+        session.status == "refunded";
+    }
+
+    function refundedSessionReadyForDeletion(data, reservationId) {
+      let session = getAfter(
+        /databases/$(database)/documents/paymentSessions/$(data.paymentSessionId)
+      ).data;
+      return session.reservationId == reservationId &&
+        session.status == "refunded" &&
+        session.reservationDeleted == true;
+    }
+
+    function validPaymentSessionRefundUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return request.resource.data.reservationId == resource.data.reservationId && (
+        (
+          resource.data.status == "paid" &&
+          request.resource.data.status == "refunded" &&
+          request.resource.data.refundStatus == "confirmed" &&
+          request.resource.data.refundedAt == request.time &&
+          request.resource.data.updatedAt == request.time &&
+          request.resource.data.refundConfirmedBy == request.auth.uid &&
+          changed.hasOnly([
+            "status", "refundStatus", "refundedAt", "refundConfirmedBy",
+            "refundConfirmedByEmail", "updatedAt"
+          ])
+        ) ||
+        (
+          resource.data.status == "refunded" &&
+          request.resource.data.status == "refunded" &&
+          request.resource.data.reservationDeleted == true &&
+          request.resource.data.reservationDeletedAt == request.time &&
+          request.resource.data.updatedAt == request.time &&
+          changed.hasOnly(["reservationDeleted", "reservationDeletedAt", "updatedAt"])
+        )
+      );
+    }
+
+    // A signed-in user may check only their own authorisation document.
+    // Admin records must be created or removed through Firebase Console.
+    match /admins/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+
+    match /shows/{showId} {
+      // The separate public ticketing site needs anonymous read-only availability.
+      // These documents contain seat state, not customer details.
+      allow read: if true;
+      allow write: if false;
+
+      match /seats/{seatId} {
+        allow read: if true;
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    match /reservations/{reservationId} {
+      allow read, create: if isAdmin();
+      allow update: if isAdmin() && (
+        !isPayHereReservation(resource.data) ||
+        validPayHereReservationRefundUpdate(reservationId)
+      );
+      allow delete: if isAdmin() && (
+        !isPayHereReservation(resource.data) ||
+        (
+          isConfirmedPayHereRefund(resource.data) &&
+          refundedSessionReadyForDeletion(resource.data, reservationId)
+        )
+      );
+    }
+
+    // The UI records create/delete actions, but audit entries themselves are immutable.
+    match /auditLogs/{logId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Retain the payment system's protected evidence. Administrators can only
+    // record a paid-to-refunded transition and the later reservation-deletion marker.
+    // Cloud Functions use Firebase Admin SDK and do not depend on these client grants.
+    match /paymentSessions/{id} {
+      allow read: if isAdmin();
+      allow update: if isAdmin() && validPaymentSessionRefundUpdate();
+      allow create, delete: if false;
+    }
+
+    match /paymentEvents/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /mail/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    match /rateLimits/{id} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
