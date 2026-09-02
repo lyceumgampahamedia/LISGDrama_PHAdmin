@@ -817,7 +817,21 @@ function csvCell(value) {
 }
 
 function exportCsv() {
-  const headings = ["Reference", "Show", "Seats", "Name", "Contact", "ID", "Payment", "Status", "Total", "Created"];
+  const headings = [
+  "Reference",
+  "Show",
+  "Seats",
+  "Name",
+  "Contact",
+  "ID",
+  "Payment",
+  "Status",
+  "Total",
+  "Staff Notes",
+  "Booking Account",
+  "Booking Account UID",
+  "Created",
+];
   const rows = visibleReservations().map((reservation) => [
     reservation.reference || reservation.id,
     SHOWS[reservation.showId]?.time || reservation.showId,
@@ -825,10 +839,17 @@ function exportCsv() {
     reservation.customer?.name,
     reservation.customer?.contact,
     reservation.customer?.idNumber || "",
-    reservationPaymentLabel(reservation),
-    effectiveReservationStatus(reservation),
-    reservationTotal(reservation),
-    reservation.createdAt?.toDate?.().toISOString() || "",
+reservationPaymentLabel(reservation),
+effectiveReservationStatus(reservation),
+reservationTotal(reservation),
+reservation.staffNotes || "",
+reservation.source === "walk-in-admin"
+  ? reservation.confirmedByEmail || "Unknown"
+  : "Online booking",
+reservation.source === "walk-in-admin"
+  ? reservation.confirmedBy || ""
+  : "",
+reservation.createdAt?.toDate?.().toISOString() || "",
   ]);
   const csv = `\uFEFF${[headings, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}`;
   const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
